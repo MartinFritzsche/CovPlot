@@ -1,0 +1,98 @@
+---
+title: "Coverage Plot"
+author: "Martin Fritzsche"
+date: "3/5/2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Description
+
+This script generates a mean coverage across reference facet plot (including standard deviation) using an adjustable sliding window. 
+It was developed to generate a coverage overview by chromosome of malaria IS (project 148), aligned via bwa-mem against P falciparum 3D7 v35.
+
+## Input
+
+* Coverage table generated via `samtools depth` (input is sorted .bam) in tsv format
+
+## Parameters
+
+* `binSize` - Size of the sliding window over which average coverage / standard deviation is calculated
+* `inputFile` - File name of input tsv file
+* `chrNames` - Names of chromosomes, passed as vector of strings
+
+## Required Packages
+
+* `ggplot2`
+* `data.table`
+
+## Code
+
+```{r results = 'hide'}
+library(ggplot2)
+library(data.table)
+
+## Define input parameters
+binSize <- 1000
+inputFile <- c("16376_aln_sort.coverage")
+chrNames <- c("Chr01", "Chr02", "Chr03", "Chr04", 
+              "Chr05", "Chr06", "Chr07", "Chr08", 
+              "Chr09", "Chr10", "Chr11", "Chr12", 
+              "Chr13", "Chr14", "Api", "Mt")
+
+## Define binning function
+slidingwindowplot <- function(windowsize, inputseq)
+{
+  starts <- seq(1, length(inputseq)-windowsize, by = windowsize)
+  n <- length(starts)
+  chunkbps <- numeric(n)
+  chunkstats <- numeric(n)
+  for (i in 1:n) {
+    chunk <- inputseq[starts[i]:(starts[i]+windowsize-1)] 
+    chunkmean <- mean(chunk)
+    chunkstdv <- sd(chunk)
+    chunkbps[i] <- chunkmean
+    chunkstats[i] <- chunkstdv
+  }
+  return (list(starts,chunkbps,chunkstats))
+}
+
+## Read-in data and convert depth column into vector
+# Read into data table
+all.data<- fread(inputFile, header = FALSE, 
+                 colClasses = c("character", "numeric", "numeric")) 
+# Convert chromosome column into factors for splitting
+all.data$V1 <- as.factor(all.data$V1) 
+# Split by chromosome
+all.data.split <- split(all.data, all.data$V1)  
+# Name dataframes in list by chromosome
+names(all.data.split) <- chrNames 
+# Vectorize third column (coverage at individual position) of every chromosome list
+vector_all <- lapply(all.data.split, function(x) {x[[3]]}) 
+# Apply binning function
+window_all <- lapply(vector_all, slidingwindowplot, windowsize = binSize) 
+# Convert into list of data frames
+df_list <- lapply(window_all, as.data.frame, col.names = c("x", "mean", "sd")) 
+# Collapse into single dataframe, clustered via chromosome
+df <- rbindlist(df_list, use.names = TRUE, fill = TRUE, idcol = "Chr")
+```
+
+## Plot
+
+```{r echo = TRUE, warning = FALSE, fig.height = 9}
+ggplot(data = df, aes(x = x, y = mean)) + 
+  geom_line(colour = "#0066CC", size = 0.1) + 
+  geom_ribbon(aes(ymax = mean + sd, ymin = mean - sd), 
+              alpha = 0.5, fill = "#0066CC") +
+  facet_grid(Chr ~ ., scale = "free_y", space = "free_y") +
+  theme_bw() + 
+  xlab("Reference Start Position") + 
+  scale_x_continuous(expand = c(0,0)) +
+  ylim(c(0, 1000)) +
+  ylab("Coverage") +
+  ggtitle("Coverage Across Reference")
+```
+
